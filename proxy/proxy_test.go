@@ -3,8 +3,6 @@ package proxy
 import (
 	"context"
 	"github.com/DataDog/datadog-go/statsd"
-	"github.com/coinbase/redisbetween/config"
-	"github.com/coinbase/redisbetween/handlers"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -29,7 +27,7 @@ func redisHost() string {
 }
 
 func TestProxy(t *testing.T) {
-	sd := setupProxy(t, "7006", -1)
+	sd, _ := setupProxy(t, "7006", -1, nil)
 
 	client := setupStandaloneClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7006.sock")
 	res := client.Do(context.Background(), "del", "hello")
@@ -45,9 +43,9 @@ func TestProxy(t *testing.T) {
 }
 
 type command struct {
-	cmd  string
-	args []string
-	res  string
+	args   []string
+	res    string
+	waitMs time.Duration
 }
 
 func TestIntegrationCommands(t *testing.T) {
@@ -66,8 +64,8 @@ func TestIntegrationCommands(t *testing.T) {
 					break
 				}
 				s := ind + strconv.Itoa(j)
-				assertResponse(t, command{cmd: "set", args: []string{s, "hi"}, res: "set " + s + " hi: OK"}, clusterClient)
-				assertResponse(t, command{cmd: "get", args: []string{s}, res: "get " + s + ": hi"}, clusterClient)
+				assertResponse(t, command{args: []string{"set", s, "hi"}, res: "set " + s + " hi: OK"}, clusterClient)
+				assertResponse(t, command{args: []string{"get", s}, res: "get " + s + ": hi"}, clusterClient)
 			}
 		}(i, t)
 		wg.Add(1)
@@ -89,17 +87,17 @@ func TestPipelinedCommands(t *testing.T) {
 		go func(index int, t *testing.T) {
 			var j int
 			ind := strconv.Itoa(index)
-			commands := []command{{cmd: "get", args: []string{string(handlers.PipelineSignalStartKey)}, res: "get 🔜: redis: nil"}}
+			commands := []command{{args: []string{"get", string(handlers.PipelineSignalStartKey)}, res: "get 🔜: redis: nil"}}
 			for {
 				j++
 				if j == 20 {
 					break
 				}
 				s := ind + strconv.Itoa(j)
-				commands = append(commands, command{cmd: "set", args: []string{s, "hi"}, res: "set " + s + " hi: OK"})
-				commands = append(commands, command{cmd: "get", args: []string{s}, res: "get " + s + ": hi"})
+				commands = append(commands, command{args: []string{"set", s, "hi"}, res: "set " + s + " hi: OK"})
+				commands = append(commands, command{args: []string{"get", s}, res: "get " + s + ": hi"})
 			}
-			commands = append(commands, command{cmd: "get", args: []string{string(handlers.PipelineSignalEndKey)}, res: "get 🔚: redis: nil"})
+			commands = append(commands, command{args: []string{"get", string(handlers.PipelineSignalEndKey)}, res: "get 🔚: redis: nil"})
 			assertResponsePipelined(t, commands, client)
 			wg.Done()
 		}(i, t)
@@ -122,31 +120,112 @@ func TestDbSelectCommand(t *testing.T) {
 	shutdown()
 }
 
+func TestInvalidatorSet(t *testing.T) {
+	testCachingIntegrationScript(t, []command{
+		{[]string{"SET", "cached:{1}ok", "hello"}, "SET cached:{1}ok hello: OK", 0},
+		{[]string{"GET", "cached:{1}ok"}, "GET cached:{1}ok: hello", 0},
+		{[]string{"GET", "cached:{1}ok"}, "GET cached:{1}ok: hello", 0},
+		{[]string{"SET", "cached:{1}ok", "new value"}, "SET cached:{1}ok new value: OK", 10},
+		{[]string{"GET", "cached:{1}ok"}, "GET cached:{1}ok: new value", 0},
+		{[]string{"SET", "cached:{2}ok", "hello"}, "SET cached:{2}ok hello: OK", 0},
+		{[]string{"GET", "cached:{2}ok"}, "GET cached:{2}ok: hello", 0},
+		{[]string{"GET", "cached:{2}ok"}, "GET cached:{2}ok: hello", 0},
+		{[]string{"SET", "cached:{2}ok", "new value"}, "SET cached:{2}ok new value: OK", 10},
+		{[]string{"GET", "cached:{2}ok"}, "GET cached:{2}ok: new value", 0},
+	}, map[string]string{
+		"cached:{1}ok": "$9\r\nnew value\r\n",
+		"cached:{2}ok": "$9\r\nnew value\r\n",
+	})
+}
+
+func TestInvalidatorMSet(t *testing.T) {
+	testCachingIntegrationScript(t, []command{
+		{[]string{"MSET", "cached:{1}ok", "hello", "cached:{1}second", "world"}, "MSET cached:{1}ok hello cached:{1}second world: OK", 0},
+		{[]string{"MGET", "cached:{1}ok", "cached:{1}second"}, "MGET cached:{1}ok cached:{1}second: [hello world]", 0},
+		{[]string{"MGET", "cached:{1}ok", "cached:{1}second"}, "MGET cached:{1}ok cached:{1}second: [hello world]", 0},
+		{[]string{"MSET", "cached:{1}ok", "new value", "cached:{1}second", "new value two"}, "MSET cached:{1}ok new value cached:{1}second new value two: OK", 10},
+		{[]string{"MGET", "cached:{1}ok", "cached:{1}second"}, "MGET cached:{1}ok cached:{1}second: [new value new value two]", 0},
+		{[]string{"MSET", "cached:{1}other", "other", "cached:{1}second", "fresh"}, "MSET cached:{1}other other cached:{1}second fresh: OK", 10},
+	}, map[string]string{
+		"cached:{1}ok": "$9\r\nnew value\r\n",
+	})
+}
+
+func TestInvalidatorCombined(t *testing.T) {
+	testCachingIntegrationScript(t, []command{
+		{[]string{"MSET", "cached:{1}combined1", "hello", "cached:{1}combined2", "world"}, "MSET cached:{1}combined1 hello cached:{1}combined2 world: OK", 0},
+		{[]string{"MGET", "cached:{1}combined1", "cached:{1}combined2"}, "MGET cached:{1}combined1 cached:{1}combined2: [hello world]", 0},
+		{[]string{"GET", "cached:{1}combined1"}, "GET cached:{1}combined1: hello", 0},
+		{[]string{"SET", "cached:{1}combined2", "goodbye"}, "SET cached:{1}combined2 goodbye: OK", 10},
+		{[]string{"GET", "cached:{1}combined1"}, "GET cached:{1}combined1: hello", 0},
+		{[]string{"GET", "cached:{1}combined2"}, "GET cached:{1}combined2: goodbye", 0},
+	}, map[string]string{
+		"cached:{1}combined1": "$5\r\nhello\r\n",
+		"cached:{1}combined2": "$7\r\ngoodbye\r\n",
+	})
+}
+
+func testCachingIntegrationScript(t *testing.T, cmds []command, cacheEntries map[string]string) {
+	standaloneShutdown, standaloneProxy := setupProxy(t, "7006", -1, []string{"cached:"})
+	standaloneClient := setupStandaloneClient(t, "/var/tmp/redisbetween-127.0.0.1-7006.sock")
+	for _, c := range cmds {
+		assertResponse(t, c, standaloneClient)
+		if c.waitMs > 0 {
+			time.Sleep(c.waitMs * time.Millisecond)
+		}
+	}
+	assertCacheContents(t, standaloneProxy, cacheEntries)
+	standaloneShutdown()
+
+	clusterShutdown, clusterProxy := setupProxy(t, "7000", -1, []string{"cached:"})
+	clusterClient := setupClusterClient(t, "/var/tmp/redisbetween-127.0.0.1-7000.sock")
+	for _, c := range cmds {
+		assertResponse(t, c, clusterClient)
+		if c.waitMs > 0 {
+			time.Sleep(c.waitMs * time.Millisecond)
+		}
+	}
+	assertCacheContents(t, clusterProxy, cacheEntries)
+	clusterShutdown()
+}
+
 func TestLocalSocketPathFromUpstream(t *testing.T) {
 	assert.Equal(t, "prefix-with.host-colon.suffix", localSocketPathFromUpstream("with.host:colon", -1, "prefix-", ".suffix"))
 	assert.Equal(t, "prefix-withoutcolon.host.suffix", localSocketPathFromUpstream("withoutcolon.host", -1, "prefix-", ".suffix"))
 	assert.Equal(t, "prefix-with.host-db-1.suffix", localSocketPathFromUpstream("with.host:db", 1, "prefix-", ".suffix"))
 }
 
-func assertResponse(t *testing.T, cmd command, c *redis.ClusterClient) {
-	args := make([]interface{}, len(cmd.args)+1)
-	args[0] = cmd.cmd
+func assertCacheContents(t *testing.T, proxy *Proxy, cacheEntries map[string]string) {
+	t.Helper()
+	if len(cacheEntries) > 0 {
+		assert.Equal(t, int64(len(cacheEntries)), proxy.cache.c.EntryCount())
+		for k, v := range cacheEntries {
+			res, err := proxy.cache.c.Get([]byte(k))
+			assert.NoError(t, err)
+			assert.Equal(t, []byte(v), res)
+		}
+	}
+}
+
+func assertResponse(t *testing.T, cmd command, c redis.UniversalClient) {
+	t.Helper()
+	args := make([]interface{}, len(cmd.args))
 	for i, a := range cmd.args {
-		args[i+1] = a
+		args[i] = a
 	}
 	res := c.Do(context.Background(), args...)
 	assert.Equal(t, cmd.res, res.String())
 }
 
-func assertResponsePipelined(t *testing.T, cmds []command, c *redis.Client) {
+func assertResponsePipelined(t *testing.T, cmds []command, c redis.UniversalClient) {
+	t.Helper()
 	p := c.Pipeline()
 	actuals := make([]*redis.Cmd, len(cmds))
 	expected := make([]string, len(cmds))
 	for i, cmd := range cmds {
-		args := make([]interface{}, len(cmd.args)+1)
-		args[0] = cmd.cmd
+		args := make([]interface{}, len(cmd.args))
 		for i, a := range cmd.args {
-			args[i+1] = a
+			args[i] = a
 		}
 		actuals[i] = p.Do(context.Background(), args...)
 		expected[i] = cmd.res
@@ -159,7 +238,7 @@ func assertResponsePipelined(t *testing.T, cmds []command, c *redis.Client) {
 	assert.Equal(t, expected, actualStrings)
 }
 
-func setupProxy(t *testing.T, upstreamPort string, db int) func() {
+func setupProxy(t *testing.T, upstreamPort string, db int, cachePrefixes []string) (func(), *Proxy) {
 	t.Helper()
 
 	uri := redisHost() + ":" + upstreamPort
@@ -174,7 +253,7 @@ func setupProxy(t *testing.T, upstreamPort string, db int) func() {
 		Unlink:            true,
 	}
 
-	proxy, err := NewProxy(zap.L(), sd, cfg, "test", uri, db, 1, 1, 1*time.Second, 1*time.Second)
+	proxy, err := NewProxy(zap.L(), sd, cfg, "test", uri, db, 1, 1, 1*time.Second, 1*time.Second, cachePrefixes)
 	assert.NoError(t, err)
 	go func() {
 		err := proxy.Run()
@@ -185,13 +264,13 @@ func setupProxy(t *testing.T, upstreamPort string, db int) func() {
 
 	return func() {
 		proxy.Shutdown()
-	}
+	}, proxy
 }
 
 func setupStandaloneClient(t *testing.T, address string) *redis.Client {
 	t.Helper()
 	client := redis.NewClient(&redis.Options{Network: "unix", Addr: address, MaxRetries: 1})
-	res := client.Do(context.Background(), "ping")
+	res := client.Do(context.Background(), "ping", "setupStandaloneClient")
 	if res.Err() != nil {
 		_ = client.Close()
 		// Use t.Fatalf instead of assert because we want to fail fast if the cluster is down.
@@ -219,7 +298,7 @@ func setupClusterClient(t *testing.T, address string) *redis.ClusterClient {
 		MaxRetries: 1,
 	}
 	client := redis.NewClusterClient(opt)
-	res := client.Do(context.Background(), "ping")
+	res := client.Do(context.Background(), "ping", "setupClusterClient")
 	if res.Err() != nil {
 		_ = client.Close()
 		// Use t.Fatalf instead of assert because we want to fail fast if the cluster is down.

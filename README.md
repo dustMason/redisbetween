@@ -1,6 +1,6 @@
 # redisbetween
 
-This is a connection pooling proxy for redis. It was originally built for an application that was hitting 
+This is a connection pooling proxy for redis. It was originally built because the Monorail was hitting AWS elasticache
 connection limits against its redis clusters. Its purpose is to solve a specific problem: many application processes
 that cannot otherwise share a connection pool need to connect to a single redis cluster.
 
@@ -102,6 +102,7 @@ Each URI can specify the following settings as GET params:
 
 - `minpoolsize` sets the min connection pool size for this host. Defaults to 1
 - `maxpoolsize` sets the max connection pool size for this host. Defaults to 10
+- `cluster` must be set to `true` for cluster upstreams. Defaults to `false`
 - `label` optionally tags events and metrics for proxy activity on this host or cluster. Defaults to `""` (disabled)
 - `readtimeout` timeout for reads to this upstream. Defaults to 5s
 - `writetimeout` timeout for writes to this upstream. Defaults to 5s
