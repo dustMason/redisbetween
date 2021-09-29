@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"github.cbhq.net/engineering/redisbetween/redis"
+	"github.com/coinbase/redisbetween/redis"
 	"github.com/coocood/freecache"
 )
 
@@ -15,8 +15,7 @@ func NewCache() *Cache {
 	}
 }
 
-// GET and MGET are cacheable, so `Set` and `Get` deal with single values and arrays alike
-
+// Set deals with single values and array alike, because both GET and MGET are cacheable
 func (c *Cache) Set(keys [][]byte, m *redis.Message) {
 	if m.IsError() { // could be MOVED, etc
 		return

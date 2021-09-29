@@ -12,6 +12,7 @@ import (
 	"github.com/coinbase/redisbetween/config"
 	"github.com/coinbase/redisbetween/handlers"
 	"github.com/coinbase/redisbetween/redis"
+
 	"github.com/mediocregopher/radix/v3"
 	"net"
 	"regexp"

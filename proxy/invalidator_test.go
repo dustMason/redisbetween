@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"github.cbhq.net/engineering/redisbetween/redis"
+	"github.com/coinbase/redisbetween/redis"
 	"github.com/stretchr/testify/assert"
 	"net"
 	"testing"

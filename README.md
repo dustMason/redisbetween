@@ -47,6 +47,25 @@ be the only socket created. However, redisbetween will inspect responses to `CLU
 cluster members that it hasn't yet seen. When it sees a new cluster member, it allocates a new connection pool and unix
 socket for it before relaying the response to the client.
 
+### Server-Assisted Client Side Caching
+
+redisbetween implements a [caching strategy described in the redis docs](https://redis.io/topics/client-side-caching)
+that relies on a new `CLIENT TRACKING` command added in Redis 6. redisbetween can maintain a local cache of all keys
+with a given prefix pattern which receives updates pushed down by redis itself. This means that the cache can be both
+efficient and lively without adding any complexity to the applications communicating through redisbetween.
+
+To use it, configure an upstream with a `cache_prefixes` URL param with a comma-separated list of prefixes. When
+creating each upstream connection, redisbetween spins up an "invalidator" goroutine. It then issues a
+`CLIENT TRACKING on REDIRECT {invalidatorConnectionId} BCAST` which tells the upstream to broadcast invalidation events
+about all tracked keys to the invalidator's connection. The invalidator purges entries in its cache by reading these
+messages.
+
+When redisbetween sees a `GET` or `MGET` command, it first checks the cache to see if _all_ of the values requested
+are present and returns them immediately if possible. Otherwise, the original query is forwarded to the upstream, and
+the cache is updated with the values returned before relaying them to the client.
+
+Note that sending `CLIENT TRACKING` commands from the client directly is not supported.
+
 ### Redisbetween Gem
 
 The [ruby](/ruby) directory contains a ruby gem that monkey patches the ruby redis client to support redisbetween. See
@@ -112,3 +131,4 @@ Each URI can specify the following settings as GET params:
 - `readtimeout` timeout for reads to this upstream. Defaults to 5s
 - `writetimeout` timeout for writes to this upstream. Defaults to 5s
 - `readonly` every connection issues a [READONLY](https://redis.io/commands/readonly) command before entering the pool. Defaults to false
+- `cache_prefixes` maintains a local cache for GETs and MGETs to keys with this prefix. Defaults to empty (nil)

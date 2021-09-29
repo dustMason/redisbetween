@@ -30,6 +30,7 @@ func TestParseFlags(t *testing.T) {
 		"-writetimeout", "1s",
 		"redis://localhost:7000/0?minpoolsize=5&maxpoolsize=33&label=cluster1",
 		"redis://localhost:7002?minpoolsize=10&label=cluster2&readtimeout=3s&writetimeout=6s",
+		"redis://localhost:7001?label=cluster3&cache_prefixes=one,two",
 	}
 
 	resetFlags()
@@ -42,9 +43,10 @@ func TestParseFlags(t *testing.T) {
 	assert.Equal(t, "unix", c.Network)
 	assert.True(t, c.Unlink)
 
-	assert.Equal(t, 2, len(c.Upstreams))
+	assert.Equal(t, 3, len(c.Upstreams))
 	upstream1 := c.Upstreams[0]
 	upstream2 := c.Upstreams[1]
+	upstream3 := c.Upstreams[2]
 	if upstream1.Label == "cluster2" {
 		temp := upstream1
 		upstream1 = upstream2
@@ -63,6 +65,10 @@ func TestParseFlags(t *testing.T) {
 	assert.Equal(t, 10, upstream2.MinPoolSize)
 	assert.Equal(t, 3*time.Second, upstream2.ReadTimeout)
 	assert.Equal(t, 6*time.Second, upstream2.WriteTimeout)
+
+	assert.Equal(t, "cluster3", upstream3.Label)
+	assert.Equal(t, "localhost:7001", upstream3.UpstreamConfigHost)
+	assert.Equal(t, []string{"one", "two"}, upstream3.CachePrefixes)
 }
 
 func TestInvalidLogLevel(t *testing.T) {

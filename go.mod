@@ -7,7 +7,6 @@ require (
 	github.com/coinbase/memcachedbetween v0.0.0-20210208182627-c6a33d9805d2
 	github.com/coinbase/mongobetween v0.0.9
 	github.com/coocood/freecache v1.1.1
-	github.com/go-delve/delve v1.5.1 // indirect
 	github.com/go-redis/redis/v8 v8.4.2
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mediocregopher/radix/v3 v3.6.0

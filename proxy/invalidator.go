@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"bytes"
-	"github.cbhq.net/engineering/redisbetween/redis"
+	"github.com/coinbase/redisbetween/redis"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"net"
