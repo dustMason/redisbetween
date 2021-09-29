@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"github.com/coinbase/memcachedbetween/listener"
 	"github.com/coinbase/memcachedbetween/pool"
+	"github.com/coinbase/mongobetween/util"
 	"github.com/coinbase/redisbetween/config"
 	"github.com/coinbase/redisbetween/handlers"
 	"github.com/coinbase/redisbetween/redis"
-	"github.com/coinbase/mongobetween/util"
 	"github.com/mediocregopher/radix/v3"
 	"net"
 	"regexp"
@@ -47,6 +47,7 @@ type Proxy struct {
 	writeTimeout       time.Duration
 	database           int
 	cachePrefixes      []string
+	readonly           bool
 
 	quit chan interface{}
 	kill chan interface{}
@@ -60,7 +61,7 @@ type Proxy struct {
 	cache         *Cache
 }
 
-func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, upstreamHost string, database int, minPoolSize, maxPoolSize int, readTimeout, writeTimeout time.Duration, cachePrefixes []string) (*Proxy, error) {
+func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, upstreamHost string, database int, minPoolSize, maxPoolSize int, readTimeout, writeTimeout time.Duration, cachePrefixes []string, readonly bool) (*Proxy, error) {
 	if label != "" {
 		log = log.With(zap.String("cluster", label))
 
@@ -76,13 +77,14 @@ func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, 
 		config: config,
 
 		upstreamConfigHost: upstreamHost,
-		localConfigHost:    localSocketPathFromUpstream(upstreamHost, database, config.LocalSocketPrefix, config.LocalSocketSuffix),
+		localConfigHost:    localSocketPathFromUpstream(upstreamHost, database, readonly, config.LocalSocketPrefix, config.LocalSocketSuffix),
 		minPoolSize:        minPoolSize,
 		maxPoolSize:        maxPoolSize,
 		readTimeout:        readTimeout,
 		writeTimeout:       writeTimeout,
 		database:           database,
 		cachePrefixes:      cachePrefixes,
+		readonly:           readonly,
 
 		quit: make(chan interface{}),
 		kill: make(chan interface{}),
@@ -281,10 +283,13 @@ func (p *Proxy) fetchFromCache(mm []*redis.Message, originalCmds []string) ([][]
 	return keys, m, err
 }
 
-func localSocketPathFromUpstream(upstream string, database int, prefix, suffix string) string {
+func localSocketPathFromUpstream(upstream string, database int, readonly bool, prefix, suffix string) string {
 	path := prefix + strings.Replace(upstream, ":", "-", -1)
 	if database > -1 {
 		path += "-" + strconv.Itoa(database)
+	}
+	if readonly {
+		path += "-ro"
 	}
 	return path + suffix
 }
@@ -295,7 +300,7 @@ func (p *Proxy) ensureListenerForUpstream(upstream, originalCmd string) {
 	defer p.listenerLock.Unlock()
 	_, ok := p.listeners[upstream]
 	if !ok {
-		local := localSocketPathFromUpstream(upstream, p.database, p.config.LocalSocketPrefix, p.config.LocalSocketSuffix)
+		local := localSocketPathFromUpstream(upstream, p.database, p.readonly, p.config.LocalSocketPrefix, p.config.LocalSocketSuffix)
 		p.log.Info("did not find listener, creating new one", zap.String("upstream", upstream), zap.String("local", local), zap.String("command", originalCmd))
 		l, err := p.createListener(local, upstream)
 		if err != nil {
@@ -325,9 +330,9 @@ func (p *Proxy) createListener(local, upstream string) (*listener.Listener, erro
 			if err != nil {
 				return conn, err
 			}
-			// if a db number has been specified, we need to issue a SELECT command before
-			// adding that connection to the pool, so its always pinned to the right db
 			if p.database > -1 {
+				// if a db number has been specified, we need to issue a SELECT command before
+				// adding that connection to the pool, so its always pinned to the right db
 				d := strconv.Itoa(p.database)
 				cmd := redis.NewCommand("SELECT", d)
 				err = redis.Encode(conn, cmd)
@@ -339,6 +344,22 @@ func (p *Proxy) createListener(local, upstream string) (*listener.Listener, erro
 				wm, err = redis.Decode(conn)
 				if err != nil {
 					logWith.Error("failed to read SELECT response", zap.Error(err), zap.String("response", wm.String()))
+					return conn, err
+				}
+			} else if p.readonly {
+				// if this pool is designated for replica reads, we need to set the READONLY flag on
+				// the upstream connection before adding it to the pool. this is only supported by
+				// clustered redis, so it cannot be combined with SELECT.
+				cmd := redis.NewCommand("READONLY")
+				err = redis.Encode(conn, cmd)
+				if err != nil {
+					logWith.Error("failed to write READONLY command", zap.Error(err))
+					return conn, err
+				}
+				var wm *redis.Message
+				wm, err = redis.Decode(conn)
+				if err != nil {
+					logWith.Error("failed to read READONLY response", zap.Error(err), zap.String("response", wm.String()))
 					return conn, err
 				}
 			}

@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"github.com/DataDog/datadog-go/statsd"
+	"github.com/coinbase/redisbetween/config"
+	"github.com/coinbase/redisbetween/handlers"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -27,7 +29,7 @@ func redisHost() string {
 }
 
 func TestProxy(t *testing.T) {
-	sd, _ := setupProxy(t, "7006", -1, nil)
+	sd, _ := setupProxy(t, "7006", -1, nil, false)
 
 	client := setupStandaloneClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7006.sock")
 	res := client.Do(context.Background(), "del", "hello")
@@ -49,8 +51,8 @@ type command struct {
 }
 
 func TestIntegrationCommands(t *testing.T) {
-	shutdownProxy := setupProxy(t, "7000", -1)
-	clusterClient := setupClusterClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7000.sock")
+	shutdownProxy, _ := setupProxy(t, "7000", -1, nil, false)
+	clusterClient := setupClusterClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7000.sock", false)
 	var i int
 	var wg sync.WaitGroup
 	for {
@@ -79,7 +81,7 @@ func TestIntegrationCommands(t *testing.T) {
 }
 
 func TestPipelinedCommands(t *testing.T) {
-	shutdownProxy := setupProxy(t, "7006", 3)
+	shutdownProxy, _ := setupProxy(t, "7006", 3, nil, false)
 	client := setupStandaloneClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7006-3.sock")
 	var i int
 	var wg sync.WaitGroup
@@ -112,7 +114,7 @@ func TestPipelinedCommands(t *testing.T) {
 }
 
 func TestDbSelectCommand(t *testing.T) {
-	shutdown := setupProxy(t, "7006", 3)
+	shutdown, _ := setupProxy(t, "7006", 3, nil, false)
 	client := setupStandaloneClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7006-3.sock")
 	res := client.Do(context.Background(), "CLIENT", "LIST")
 	assert.NoError(t, res.Err())
@@ -166,7 +168,7 @@ func TestInvalidatorCombined(t *testing.T) {
 }
 
 func testCachingIntegrationScript(t *testing.T, cmds []command, cacheEntries map[string]string) {
-	standaloneShutdown, standaloneProxy := setupProxy(t, "7006", -1, []string{"cached:"})
+	standaloneShutdown, standaloneProxy := setupProxy(t, "7006", -1, []string{"cached:"}, false)
 	standaloneClient := setupStandaloneClient(t, "/var/tmp/redisbetween-127.0.0.1-7006.sock")
 	for _, c := range cmds {
 		assertResponse(t, c, standaloneClient)
@@ -177,8 +179,8 @@ func testCachingIntegrationScript(t *testing.T, cmds []command, cacheEntries map
 	assertCacheContents(t, standaloneProxy, cacheEntries)
 	standaloneShutdown()
 
-	clusterShutdown, clusterProxy := setupProxy(t, "7000", -1, []string{"cached:"})
-	clusterClient := setupClusterClient(t, "/var/tmp/redisbetween-127.0.0.1-7000.sock")
+	clusterShutdown, clusterProxy := setupProxy(t, "7000", -1, []string{"cached:"}, false)
+	clusterClient := setupClusterClient(t, "/var/tmp/redisbetween-127.0.0.1-7000.sock", false)
 	for _, c := range cmds {
 		assertResponse(t, c, clusterClient)
 		if c.waitMs > 0 {
@@ -189,10 +191,20 @@ func testCachingIntegrationScript(t *testing.T, cmds []command, cacheEntries map
 	clusterShutdown()
 }
 
+func TestReadonlyCommand(t *testing.T) {
+	shutdown, _ := setupProxy(t, "7000", -1, nil, true)
+	client := setupClusterClient(t, "/var/tmp/redisbetween-"+redisHost()+"-7000-ro.sock", true)
+	res := client.Do(context.Background(), "CLIENT", "LIST")
+	assert.NoError(t, res.Err())
+	assert.Contains(t, res.String(), "flags=r")
+	shutdown()
+}
+
 func TestLocalSocketPathFromUpstream(t *testing.T) {
-	assert.Equal(t, "prefix-with.host-colon.suffix", localSocketPathFromUpstream("with.host:colon", -1, "prefix-", ".suffix"))
-	assert.Equal(t, "prefix-withoutcolon.host.suffix", localSocketPathFromUpstream("withoutcolon.host", -1, "prefix-", ".suffix"))
-	assert.Equal(t, "prefix-with.host-db-1.suffix", localSocketPathFromUpstream("with.host:db", 1, "prefix-", ".suffix"))
+	assert.Equal(t, "prefix-with.host-colon.suffix", localSocketPathFromUpstream("with.host:colon", -1, false, "prefix-", ".suffix"))
+	assert.Equal(t, "prefix-withoutcolon.host.suffix", localSocketPathFromUpstream("withoutcolon.host", -1, false, "prefix-", ".suffix"))
+	assert.Equal(t, "prefix-with.host-db-1.suffix", localSocketPathFromUpstream("with.host:db", 1, false, "prefix-", ".suffix"))
+	assert.Equal(t, "prefix-with.host-db-ro.suffix", localSocketPathFromUpstream("with.host:db", -1, true, "prefix-", ".suffix"))
 }
 
 func assertCacheContents(t *testing.T, proxy *Proxy, cacheEntries map[string]string) {
@@ -238,7 +250,7 @@ func assertResponsePipelined(t *testing.T, cmds []command, c redis.UniversalClie
 	assert.Equal(t, expected, actualStrings)
 }
 
-func setupProxy(t *testing.T, upstreamPort string, db int, cachePrefixes []string) (func(), *Proxy) {
+func setupProxy(t *testing.T, upstreamPort string, db int, cachePrefixes []string, readonly bool) (func(), *Proxy) {
 	t.Helper()
 
 	uri := redisHost() + ":" + upstreamPort
@@ -253,7 +265,7 @@ func setupProxy(t *testing.T, upstreamPort string, db int, cachePrefixes []strin
 		Unlink:            true,
 	}
 
-	proxy, err := NewProxy(zap.L(), sd, cfg, "test", uri, db, 1, 1, 1*time.Second, 1*time.Second, cachePrefixes)
+	proxy, err := NewProxy(zap.L(), sd, cfg, "test", uri, db, 1, 1, 1*time.Second, 1*time.Second, cachePrefixes, readonly)
 	assert.NoError(t, err)
 	go func() {
 		err := proxy.Run()
@@ -279,7 +291,7 @@ func setupStandaloneClient(t *testing.T, address string) *redis.Client {
 	return client
 }
 
-func setupClusterClient(t *testing.T, address string) *redis.ClusterClient {
+func setupClusterClient(t *testing.T, address string, readonly bool) *redis.ClusterClient {
 	t.Helper()
 	opt := &redis.ClusterOptions{
 		Addrs: []string{address},
@@ -290,7 +302,11 @@ func setupClusterClient(t *testing.T, address string) *redis.ClusterClient {
 				if err != nil {
 					return nil, err
 				}
-				addr = "/var/tmp/redisbetween-" + host + "-" + port + ".sock"
+				addr = "/var/tmp/redisbetween-" + host + "-" + port
+				if readonly {
+					addr += "-ro"
+				}
+				addr += ".sock"
 				network = "unix"
 			}
 			return net.Dial(network, addr)
