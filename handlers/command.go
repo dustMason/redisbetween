@@ -158,8 +158,8 @@ func (c *connection) roundTrip(wm []*redis.Message) ([]*redis.Message, error) {
 		_ = conn.Return()
 	}()
 
-	//l = c.log.With(zap.Uint64("upstream_id", conn.ID()))
-	//l.Debug("Connection checked out")
+	l = c.log.With(zap.Uint64("upstream_id", conn.ID()))
+	l.Debug("Connection checked out")
 
 	if err = WriteWireMessages(c.ctx, l, wm, conn.Conn(), conn.Address().String(), conn.ID(), c.writeTimeout, false, conn.Close); err != nil {
 		return nil, err
