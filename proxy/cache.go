@@ -3,15 +3,20 @@ package proxy
 import (
 	"github.com/coinbase/redisbetween/redis"
 	"github.com/coocood/freecache"
+	"go.uber.org/zap"
 )
 
 type Cache struct {
-	c *freecache.Cache
+	c   *freecache.Cache
+	ttl int
+	log *zap.Logger
 }
 
-func NewCache() *Cache {
+func NewCache(bytes int, ttlSeconds int, log *zap.Logger) *Cache {
 	return &Cache{
-		c: freecache.NewCache(100 * 1024 * 1024), // 100MB, allocated up front
+		c:   freecache.NewCache(bytes), // note that this allocated up front
+		log: log,
+		ttl: ttlSeconds,
 	}
 }
 
@@ -58,6 +63,12 @@ func (c *Cache) Clear() {
 }
 
 func (c *Cache) set(key []byte, mm *redis.Message) {
-	b, _ := redis.EncodeToBytes(mm) // TODO log this error
-	_ = c.c.Set(key, b, 360)        // TODO make this TTL configurable, log this error
+	b, err := redis.EncodeToBytes(mm)
+	if err != nil {
+		c.log.Error("error encoding redis message", zap.String("key", string(key)))
+	}
+	err = c.c.Set(key, b, c.ttl)
+	if err != nil {
+		c.log.Error("error writing to cache", zap.String("key", string(key)))
+	}
 }

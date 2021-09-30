@@ -1,4 +1,13 @@
-# Implementing client-side caching
+- [x] implement new url param
+- [x] invalidator
+- [x] RWlock around cache reads/writes (built into freecache)
+- [x] dedicated invalidator connection per upstream
+- [x] handle cache set errors
+- [x] allow cache ttl to be configurable
+- [x] allow cache bounds to be configurable
+- [ ] support for partial cache responses within `MGET`s. need to implement response value parsing to get this.
+
+# Old notes from January:
 
 - Add a new url param on upstreams called `cache_prefixes=list,of,prefixes` 
     - can use special value `__all__`? not sure if we need this
@@ -18,11 +27,3 @@
 - Local cache _must_ have overall mem bounds and upper-bound TTLs (10 minutes to start? with random jitter?)
 - IDEA: redisbetween could proactively fetch and store values as they are invalidated? would make sense for kill
   switches, rates and i18n maybe
-
-# Use cases
-
-- kill switches. each machine will only hit upstream once for the kill switch values and instead read almost entirely
-  from cache. however, invalidations could cause stampedes.
-- rates. similar story as above. stampedes are possible
-- main. mixed workload. will have to study existing queries to find good candidates
-- i18n. data rarely changes, and when it does its done by a background job that batches them all out

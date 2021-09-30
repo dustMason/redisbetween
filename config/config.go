@@ -40,6 +40,8 @@ type Upstream struct {
 	WriteTimeout       time.Duration
 	Readonly           bool
 	CachePrefixes      []string
+	CacheSizeMB        int
+	CacheTTLSeconds    int
 }
 
 func ParseFlags() *Config {
@@ -137,7 +139,9 @@ func parseFlags() (*Config, error) {
 				Database:           db,
 				ReadTimeout:        rt,
 				WriteTimeout:       wt,
-				CachePrefixes:      getStringsParam(params, "cache_prefixes", nil),
+				CachePrefixes:      getStringsParam(params, "cacheprefixes", nil),
+				CacheSizeMB:        getIntParam(params, "cachesizemb", 100),
+				CacheTTLSeconds:    getIntParam(params, "cachettlseconds", 360),
 				Readonly:           getBoolParam(params, "readonly"),
 			}
 

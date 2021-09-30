@@ -129,5 +129,7 @@ Each URI can specify the following settings as GET params:
 - `label` optionally tags events and metrics for proxy activity on this host or cluster. Defaults to `""` (disabled)
 - `readtimeout` timeout for reads to this upstream. Defaults to 5s
 - `writetimeout` timeout for writes to this upstream. Defaults to 5s
+- `cacheprefixes` maintains a local cache for GETs and MGETs to keys with this prefix. Defaults to empty (nil)
+- `cachesizemb` size, as an int of MB, of the local cache. Defaults to 100
+- `cachettlseconds` time, as an int of seconds, to keep values cached locally. Defaults to 360
 - `readonly` every connection issues a [READONLY](https://redis.io/commands/readonly) command before entering the pool. Defaults to false
-- `cache_prefixes` maintains a local cache for GETs and MGETs to keys with this prefix. Defaults to empty (nil)

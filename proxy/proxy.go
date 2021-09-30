@@ -48,6 +48,7 @@ type Proxy struct {
 	writeTimeout       time.Duration
 	database           int
 	cachePrefixes      []string
+	cacheTTLSeconds    int
 	readonly           bool
 
 	quit chan interface{}
@@ -62,7 +63,7 @@ type Proxy struct {
 	cache         *Cache
 }
 
-func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, upstreamHost string, database int, minPoolSize, maxPoolSize int, readTimeout, writeTimeout time.Duration, cachePrefixes []string, readonly bool) (*Proxy, error) {
+func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, upstreamHost string, database int, minPoolSize, maxPoolSize int, readTimeout, writeTimeout time.Duration, cachePrefixes []string, cacheSizeMB int, cacheTTLSeconds int, readonly bool) (*Proxy, error) {
 	if label != "" {
 		log = log.With(zap.String("cluster", label))
 
@@ -72,7 +73,8 @@ func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, 
 			return nil, err
 		}
 	}
-	return &Proxy{
+
+	p := &Proxy{
 		log:    log,
 		statsd: sd,
 		config: config,
@@ -92,8 +94,13 @@ func NewProxy(log *zap.Logger, sd *statsd.Client, config *config.Config, label, 
 
 		listeners:    make(map[string]*listener.Listener),
 		invalidators: make(map[string]*Invalidator),
-		cache:        NewCache(),
-	}, nil
+	}
+
+	if len(cachePrefixes) > 0 {
+		p.cache = NewCache(cacheSizeMB*1024*1024, cacheTTLSeconds, log)
+	}
+
+	return p, nil
 }
 
 func (p *Proxy) Run() error {

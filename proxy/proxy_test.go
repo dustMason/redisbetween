@@ -265,7 +265,7 @@ func setupProxy(t *testing.T, upstreamPort string, db int, cachePrefixes []strin
 		Unlink:            true,
 	}
 
-	proxy, err := NewProxy(zap.L(), sd, cfg, "test", uri, db, 1, 1, 1*time.Second, 1*time.Second, cachePrefixes, readonly)
+	proxy, err := NewProxy(zap.L(), sd, cfg, "test", uri, db, 1, 1, 1*time.Second, 1*time.Second, cachePrefixes, 1, 10, readonly)
 	assert.NoError(t, err)
 	go func() {
 		err := proxy.Run()

@@ -30,7 +30,7 @@ func TestParseFlags(t *testing.T) {
 		"-writetimeout", "1s",
 		"redis://localhost:7000/0?minpoolsize=5&maxpoolsize=33&label=cluster1",
 		"redis://localhost:7002?minpoolsize=10&label=cluster2&readtimeout=3s&writetimeout=6s",
-		"redis://localhost:7001?label=cluster3&cache_prefixes=one,two",
+		"redis://localhost:7001?label=cluster3&cacheprefixes=one,two&cachesizemb=100&cachettlseconds=400",
 	}
 
 	resetFlags()
@@ -69,6 +69,8 @@ func TestParseFlags(t *testing.T) {
 	assert.Equal(t, "cluster3", upstream3.Label)
 	assert.Equal(t, "localhost:7001", upstream3.UpstreamConfigHost)
 	assert.Equal(t, []string{"one", "two"}, upstream3.CachePrefixes)
+	assert.Equal(t, 100, upstream3.CacheSizeMB)
+	assert.Equal(t, 400, upstream3.CacheTTLSeconds)
 }
 
 func TestInvalidLogLevel(t *testing.T) {
