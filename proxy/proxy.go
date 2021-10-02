@@ -115,13 +115,13 @@ func (p *Proxy) Shutdown() {
 	for _, l := range p.listeners {
 		l.Shutdown()
 	}
-	p.listenerLock.Unlock()
 	for _, i := range p.invalidators {
 		err := i.Shutdown()
 		if err != nil {
 			p.log.Error("error closing Invalidator", zap.Error(err))
 		}
 	}
+	p.listenerLock.Unlock()
 	close(p.quit)
 }
 
@@ -381,9 +381,10 @@ func (p *Proxy) createListener(local, upstream string) (*listener.Listener, erro
 				if err != nil {
 					logWith.Error("unable to create Invalidator", zap.Error(err))
 				}
+				p.listenerLock.Lock()
 				p.invalidators[upstream] = inv
+				p.listenerLock.Unlock()
 				p.runInvalidator(inv)
-
 			}
 
 			return conn, err
