@@ -11,7 +11,7 @@ from rediscluster.nodemanager import NodeManager
 logger = logging.getLogger(__name__)
 
 
-def redisbetween_socket_path(host, port, db, readonly):
+def redisbetween_socket_path(host, port, db, readonly=False):
     rb_socket_path = f"/var/tmp/redisbetween-{host}-{port}"
     if db is not None:
         rb_socket_path += f"-{db}"
@@ -36,8 +36,8 @@ class RedisbetweenReadonlyClusterConnection(UnixDomainSocketConnection):
             kwargs.pop("port", 6379),
             kwargs.pop("db", None),
         )
-        kwargs["path"] = redisbetween_socket_path(host, port, path, True)
         self.readonly = kwargs.pop('readonly', False)
+        kwargs["path"] = redisbetween_socket_path(host, port, path, self.readonly)
         kwargs['parser_class'] = ClusterParser
         super(RedisbetweenReadonlyClusterConnection, self).__init__(*args, **kwargs)
 
@@ -103,24 +103,23 @@ redis_client = RedisCluster(
         skip_full_coverage_check=True,
     ))
 )
-ro_redis_client = RedisCluster(
-    read_from_replicas=True,
-    startup_nodes=startup_nodes,
-    decode_responses=True,
-    skip_full_coverage_check=True,
-    connection_class=RedisbetweenReadonlyClusterConnection,
-    connection_pool=(RedisbetweenClusterWithReadReplicasConnectionPool(
-        startup_nodes=startup_nodes,
-        skip_full_coverage_check=True,
-        read_from_replicas=True,
-    ))
-)
+# ro_redis_client = RedisCluster(
+#     read_from_replicas=True,
+#     startup_nodes=startup_nodes,
+#     decode_responses=True,
+#     skip_full_coverage_check=True,
+#     connection_class=RedisbetweenReadonlyClusterConnection,
+#     connection_pool=(RedisbetweenClusterWithReadReplicasConnectionPool(
+#         startup_nodes=startup_nodes,
+#         skip_full_coverage_check=True,
+#         read_from_replicas=True,
+#     ))
+# )
+
+for i in range(10):
+    redis_client.set(f"ok{i}", i)
 
 for i in range(100):
-    redis_client.set(f"hello{i}", i)
+    print(redis_client.get(f"ok{i}"), end='')
+    print(redis_client.get(f"ok{i}"), end='')
 
-for i in range(100):
-    first = redis_client.get(f"hello{i}")
-    for j in range(5):
-        if first != ro_redis_client.get(f"hello{i}"):
-            print(f"err on {j} of {i}")

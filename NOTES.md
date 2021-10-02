@@ -5,7 +5,29 @@
 - [x] handle cache set errors
 - [x] allow cache ttl to be configurable
 - [x] allow cache bounds to be configurable
+- [x] have the invalidator itself re-send the CLIENT TRACKING command when it dies
 - [ ] support for partial cache responses within `MGET`s. need to implement response value parsing to get this.
+- [ ] implement `OPTIN` caching (https://redis.io/topics/client-side-caching#opt-in-caching)? requires client patch
+
+
+- python client patch for pipeline signals
+- make sure cache works for pipelined gets
+- add a heartbeat to the invalidator run goroutine so that if it catastrophically dies the owner can kill the cache
+
+## Invalidator
+
+Happy path: before the upstream proxy struct is returned to the caller, an `Invalidator` is created and connected. It
+has a heartbeat goroutine that sends a `PING` upstream every 5 seconds. It constructs a `CLIENT TRACKING` command for
+the "main" proxy upstream connection to send. This command references the server side connection id of the invalidator's
+connection.
+
+Failure modes:
+- The invalidator's long-lived connection dies. When it reconnects, it will have a new connection id. How does the
+  upstream issue a new `CLIENT TRACKING` command to make sure that invalidation events are getting broadcast to the new
+  invalidator connection?
+  A: we could have the `Proxy` store the connection id of the invalidator locally, and each time it processes a message
+  it asks the invalidator if this connection id matches the one it currently has. If not, issue a new `CLIENT TRACKING`
+  command. this connection id should change very infrequently.
 
 # Old notes from January:
 

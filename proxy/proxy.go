@@ -194,9 +194,10 @@ func (p *Proxy) runInvalidator(i *Invalidator) {
 	}()
 }
 
-func (p *Proxy) interceptMessages(originalCmds []string, mm []*redis.Message, rt handlers.RoundTripper) ([]*redis.Message, error) {
+func (p *Proxy) interceptMessage(originalCmds []string, mm []*redis.Message, rt handlers.RoundTripper) ([]*redis.Message, error) {
 	var cacheKeys [][][]byte
 
+	// todo this needs to special-case a payload of pipelined GETs. i guess this is the same as MGET...
 	if p.cachePrefixes != nil {
 		k, allCached, err := p.fetchFromCache(mm, originalCmds)
 		cacheKeys = k
@@ -376,25 +377,13 @@ func (p *Proxy) createListener(local, upstream string) (*listener.Listener, erro
 			// listen for invalidation events from the upstream
 			if p.cachePrefixes != nil {
 				p.log.Info("creating Invalidator", zap.String("upstream", upstream))
-				inv, err := NewInvalidator(upstream, InvalidatorLogger(logWith))
+				inv, err := NewInvalidator(upstream, p.cachePrefixes, InvalidatorLogger(logWith))
 				if err != nil {
 					logWith.Error("unable to create Invalidator", zap.Error(err))
 				}
 				p.invalidators[upstream] = inv
 				p.runInvalidator(inv)
-				cmd := inv.SubscribeCommand(p.cachePrefixes)
-				err = redis.Encode(conn, cmd)
-				if err != nil {
-					logWith.Error("failed to write CLIENT TRACKING command", zap.Error(err), zap.String("command", cmd.String()))
-					return conn, err
-				}
 
-				var wm *redis.Message
-				wm, err = redis.Decode(conn)
-				if err != nil {
-					logWith.Error("failed to read CLIENT TRACKING response", zap.Error(err), zap.String("response", wm.String()))
-					return conn, err
-				}
 			}
 
 			return conn, err
@@ -410,7 +399,7 @@ func (p *Proxy) createListener(local, upstream string) (*listener.Listener, erro
 	}
 
 	connectionHandler := func(log *zap.Logger, conn net.Conn, id uint64, kill chan interface{}) {
-		handlers.CommandConnection(log, p.statsd, conn, local, p.readTimeout, p.writeTimeout, id, s, kill, p.interceptMessages)
+		handlers.CommandConnection(log, p.statsd, conn, local, p.readTimeout, p.writeTimeout, id, s, kill, p.interceptMessage)
 	}
 	shutdownHandler := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), disconnectTimeout)

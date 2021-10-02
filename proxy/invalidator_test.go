@@ -10,9 +10,9 @@ import (
 )
 
 func TestInvalidator_SubscribeCommand(t *testing.T) {
-	i := Invalidator{clientID: 42}
+	i := Invalidator{clientID: 42, prefixes: []string{"a:", "b"}}
 	expected := redis.NewCommand("CLIENT", "TRACKING", "on", "REDIRECT", "42", "BCAST", "PREFIX", "a:", "PREFIX", "b")
-	assert.Equal(t, expected, i.SubscribeCommand([]string{"a:", "b"}))
+	assert.Equal(t, expected, i.subscribeCommand())
 }
 
 func TestNewInvalidator(t *testing.T) {
@@ -20,6 +20,7 @@ func TestNewInvalidator(t *testing.T) {
 	go assertConnect(t, server, nil)
 	i, err := NewInvalidator(
 		"hello",
+		[]string{"ignored"},
 		InvalidatorConnFunc(func(network, addr string) (net.Conn, error) {
 			return client, nil
 		}),
@@ -46,6 +47,7 @@ func TestInvalidator_Run(t *testing.T) {
 
 	i, err := NewInvalidator(
 		"hello",
+		[]string{"ignored"},
 		InvalidatorConnFunc(func(network, addr string) (net.Conn, error) {
 			return client, nil
 		}),
@@ -77,6 +79,7 @@ func TestInvalidator_Run_Reconnect(t *testing.T) {
 
 	i, err := NewInvalidator(
 		"hello",
+		[]string{"hi"},
 		InvalidatorLogger(zaptest.NewLogger(t)),
 		InvalidatorConnFunc(func(network, addr string) (net.Conn, error) {
 			return client, nil
@@ -89,19 +92,27 @@ func TestInvalidator_Run_Reconnect(t *testing.T) {
 	//assert.NoError(t, err)
 }
 
+// this should mimic redis' responses to the given commands
 func assertConnect(t *testing.T, server net.Conn, cb func()) {
 	t.Helper()
+
+	// CLIENT ID
 	m, err := redis.Decode(server)
 	assert.NoError(t, err)
 	assert.Equal(t, redis.NewCommand("CLIENT", "ID"), m)
-
 	err = redis.Encode(server, redis.NewInt([]byte(redis.Itoa(42))))
 	assert.NoError(t, err)
 
+	// CLIENT TRACKING ...
+	_, err = redis.Decode(server)
+	assert.NoError(t, err)
+	err = redis.Encode(server, redis.NewString([]byte("OK")))
+	assert.NoError(t, err)
+
+	// SUBSCRIBE ...
 	m, err = redis.Decode(server)
 	assert.NoError(t, err)
 	assert.Equal(t, redis.NewCommand("SUBSCRIBE", "__redis__:invalidate"), m)
-
 	err = redis.Encode(server, redis.NewString([]byte("OK")))
 	assert.NoError(t, err)
 

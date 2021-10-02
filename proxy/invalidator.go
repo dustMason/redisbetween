@@ -13,13 +13,14 @@ var defaultPingInterval = 5 * time.Second
 var defaultReconnectDelay = 1 * time.Second
 
 type Invalidator struct {
-	conn          net.Conn
 	clientID      int64
+	conn          net.Conn
 	upstream      string
 	heartbeat     *time.Ticker
 	stopHeartbeat chan struct{}
 	opts          invalidatorOpts
 	stopped       atomic.Bool
+	prefixes      []string
 }
 
 type ConnFunc func(network, addr string) (net.Conn, error)
@@ -46,7 +47,7 @@ func InvalidatorLogger(logger *zap.Logger) InvalidatorOpt {
 	}
 }
 
-func NewInvalidator(upstream string, options ...InvalidatorOpt) (*Invalidator, error) {
+func NewInvalidator(upstream string, prefixes []string, options ...InvalidatorOpt) (*Invalidator, error) {
 	opts := invalidatorOpts{
 		connFunc: DefaultConnFunc,
 	}
@@ -63,6 +64,7 @@ func NewInvalidator(upstream string, options ...InvalidatorOpt) (*Invalidator, e
 		upstream:      upstream,
 		stopHeartbeat: make(chan struct{}),
 		opts:          opts,
+		prefixes:      prefixes,
 	}
 	err := i.connect()
 	return i, err
@@ -97,14 +99,15 @@ func (i *Invalidator) Run(cache *Cache) {
 			continue
 		}
 		for _, mm := range m.Array[2].Array {
+			i.opts.log.Debug("Invalidate", zap.String("key", string(mm.Value)))
 			_ = cache.Del(mm.Value)
 		}
 	}
 }
 
-func (i *Invalidator) SubscribeCommand(prefixes []string) *redis.Message {
+func (i *Invalidator) subscribeCommand() *redis.Message {
 	parts := []string{"CLIENT", "TRACKING", "on", "REDIRECT", redis.Itoa(i.clientID), "BCAST"}
-	for _, p := range prefixes {
+	for _, p := range i.prefixes {
 		parts = append(parts, "PREFIX", p)
 	}
 	return redis.NewCommand(parts...)
@@ -132,6 +135,20 @@ func (i *Invalidator) connect() error {
 	}
 	id, _ := redis.Btoi64(m.Value)
 	i.clientID = id
+
+	// this works because the BCAST option causes redis to emit _all_ invalidation events for the
+	// given prefixes to all subscribed connections. so invalidations belonging to the main data
+	// connection will be sent to this one.
+	cmd := i.subscribeCommand()
+	err = redis.Encode(i.conn, cmd)
+	if err != nil {
+		return err
+	}
+	_, err = redis.Decode(i.conn)
+	if err != nil {
+		return err
+	}
+
 	i.heartbeat = time.NewTicker(defaultPingInterval)
 	go i.keepalive()
 
